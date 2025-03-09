@@ -1,6 +1,7 @@
 use super::nodes::Nodes;
 use derive_builder::Builder;
-use std::collections::{BTreeMap, HashSet};
+use linked_hash_map::LinkedHashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 #[derive(Builder, Debug, Clone)]
@@ -11,8 +12,33 @@ pub struct OpenBoundaries {
 }
 
 impl OpenBoundaries {
-    pub fn nodes_ids(&self) -> Vec<Vec<u32>> {
-        self.nodes_ids.clone()
+    pub fn nodes_ids(&self) -> &Vec<Vec<u32>> {
+        &self.nodes_ids
+    }
+    pub fn iter(&self) -> OpenBoundariesIter {
+        OpenBoundariesIter {
+            outer: &self.nodes_ids,
+            current: 0,
+        }
+    }
+}
+
+pub struct OpenBoundariesIter<'a> {
+    outer: &'a Vec<Vec<u32>>,
+    current: usize,
+}
+
+impl<'a> Iterator for OpenBoundariesIter<'a> {
+    type Item = &'a Vec<u32>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current < self.outer.len() {
+            let item = &self.outer[self.current];
+            self.current += 1;
+            Some(item)
+        } else {
+            None
+        }
     }
 }
 
@@ -20,7 +46,7 @@ impl OpenBoundariesBuilder {
     pub fn validate(&self) -> Result<(), OpenBoundariesBuilderError> {
         let node_hash_set: HashSet<u32> = self.nodes.as_ref().map_or(HashSet::new(), |nodes_arc| {
             let nodes = Arc::as_ref(nodes_arc);
-            nodes.btree_map().keys().cloned().collect()
+            nodes.hash_map().keys().cloned().collect()
         });
 
         let all_node_ids: HashSet<u32> =
@@ -51,7 +77,7 @@ impl LandBoundariesBuilder {
     pub fn validate(&self) -> Result<(), LandBoundariesBuilderError> {
         let node_hash_set: HashSet<u32> = self.nodes.as_ref().map_or(HashSet::new(), |nodes_arc| {
             let nodes = Arc::as_ref(nodes_arc);
-            nodes.btree_map().keys().cloned().collect()
+            nodes.hash_map().keys().cloned().collect()
         });
 
         let all_node_ids: HashSet<u32> =
@@ -72,8 +98,8 @@ impl LandBoundariesBuilder {
 }
 
 impl LandBoundaries {
-    pub fn nodes_ids(&self) -> Vec<Vec<u32>> {
-        self.nodes_ids.clone()
+    pub fn nodes_ids(&self) -> &Vec<Vec<u32>> {
+        &self.nodes_ids
     }
 }
 
@@ -88,7 +114,7 @@ impl InteriorBoundariesBuilder {
     pub fn validate(&self) -> Result<(), InteriorBoundariesBuilderError> {
         let node_hash_set: HashSet<u32> = self.nodes.as_ref().map_or(HashSet::new(), |nodes_arc| {
             let nodes = Arc::as_ref(nodes_arc);
-            nodes.btree_map().keys().cloned().collect()
+            nodes.hash_map().keys().cloned().collect()
         });
 
         let all_node_ids: HashSet<u32> =
@@ -108,8 +134,8 @@ impl InteriorBoundariesBuilder {
     }
 }
 impl InteriorBoundaries {
-    pub fn nodes_ids(&self) -> Vec<Vec<u32>> {
-        self.nodes_ids.clone()
+    pub fn nodes_ids(&self) -> &Vec<Vec<u32>> {
+        &self.nodes_ids
     }
 }
 
@@ -122,22 +148,25 @@ pub struct Boundaries {
 }
 
 impl Boundaries {
-    pub fn to_boundary_type_map(&self) -> BTreeMap<BoundaryType, Vec<Vec<u32>>> {
-        let mut btree_map = BTreeMap::new();
+    pub fn to_boundary_type_map(&self) -> LinkedHashMap<BoundaryType, &Vec<Vec<u32>>> {
+        let mut map = LinkedHashMap::new();
 
         if let Some(ref open_boundary) = self.open {
-            btree_map.insert(BoundaryType::Open, open_boundary.nodes_ids());
+            map.insert(BoundaryType::Open, open_boundary.nodes_ids());
         }
 
         if let Some(ref land_boundary) = self.land {
-            btree_map.insert(BoundaryType::Land, land_boundary.nodes_ids());
+            map.insert(BoundaryType::Land, land_boundary.nodes_ids());
         }
 
         if let Some(ref interior_boundary) = self.interior {
-            btree_map.insert(BoundaryType::Interior, interior_boundary.nodes_ids());
+            map.insert(BoundaryType::Interior, interior_boundary.nodes_ids());
         }
 
-        btree_map
+        map
+    }
+    pub fn open(&self) -> Option<&OpenBoundaries> {
+        self.open.as_ref()
     }
 }
 
