@@ -4,3 +4,6 @@
 [submodule "src/vgrid"]
 	path = src/vgrid
 	url = git@github.com:jreniel/schismrs-vgrid.git
+[submodule "src/storm_events"]
+	path = src/storm_events
+	url = git@github.com:jreniel/stormeventrs.git
