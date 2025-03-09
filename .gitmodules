@@ -1,0 +1,3 @@
+[submodule "src/hgrid"]
+	path = src/hgrid
+	url = git@github.com:jreniel/schismrs-hgrid.git
