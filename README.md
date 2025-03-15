@@ -7,9 +7,9 @@
 
 ## Crates
 
-- [schismrs-hgrid](src/hgrid)
-- [schismrs-vgrid](src/vgrid)
-- [schismrs-storm-events](src/storm_events)
+- [schismrs-hgrid](https://github.com/jreniel/schismrs-hgrid)
+- [schismrs-vgrid](https://github.com/jreniel/schismrs-vgrid)
+- [schismrs-storm-events](https://github.com/jreniel/stormeventsrs)
 
 ### License
 
