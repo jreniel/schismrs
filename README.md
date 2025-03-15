@@ -9,7 +9,7 @@
 
 - [schismrs-hgrid](https://github.com/jreniel/schismrs-hgrid)
 - [schismrs-vgrid](https://github.com/jreniel/schismrs-vgrid)
-- [schismrs-storm-events](https://github.com/jreniel/stormeventsrs)
+- [schismrs-storm-events](https://github.com/jreniel/stormeventrs)
 
 ### License
 
