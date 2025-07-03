@@ -1,12 +1,13 @@
 use derive_builder::Builder;
+use linked_hash_map::LinkedHashMap;
 use log;
 use proj::Proj;
-use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::File;
 use std::io::{prelude::*, BufReader};
 use std::path::Path;
 use std::sync::Arc;
+use tempfile::Builder;
 use tempfile::NamedTempFile;
 use thiserror::Error;
 use url::Url;
@@ -16,20 +17,20 @@ use url::Url;
 pub struct Gr3ParserOutput {
     description: Option<String>,
     crs: Option<Arc<Proj>>,
-    nodes: BTreeMap<u32, (Vec<f64>, Option<Vec<f64>>)>,
-    elements: BTreeMap<u32, Vec<u32>>, // elements
+    nodes: LinkedHashMap<u32, (Vec<f64>, Option<Vec<f64>>)>,
+    elements: Option<LinkedHashMap<u32, Vec<u32>>>,
     open_boundaries: Option<Vec<Vec<u32>>>,
     land_boundaries: Option<Vec<Vec<u32>>>,
     interior_boundaries: Option<Vec<Vec<u32>>>,
 }
 
 impl Gr3ParserOutput {
-    pub fn nodes(&self) -> BTreeMap<u32, (Vec<f64>, Option<Vec<f64>>)> {
+    pub fn nodes(&self) -> LinkedHashMap<u32, (Vec<f64>, Option<Vec<f64>>)> {
         self.nodes.clone()
     }
 
-    pub fn nodes_values_reversed_sign(&self) -> BTreeMap<u32, (Vec<f64>, Option<Vec<f64>>)> {
-        let mut new_nodes = BTreeMap::<u32, (Vec<f64>, Option<Vec<f64>>)>::new();
+    pub fn nodes_values_reversed_sign(&self) -> LinkedHashMap<u32, (Vec<f64>, Option<Vec<f64>>)> {
+        let mut new_nodes = LinkedHashMap::<u32, (Vec<f64>, Option<Vec<f64>>)>::new();
         for (&node_id, (coord, value)) in self.nodes.iter() {
             let reversed_value = value.as_ref().map(|v| v.iter().map(|&x| -x).collect());
 
@@ -38,7 +39,7 @@ impl Gr3ParserOutput {
         new_nodes
     }
 
-    pub fn elements(&self) -> BTreeMap<u32, Vec<u32>> {
+    pub fn elements(&self) -> Option<LinkedHashMap<u32, Vec<u32>>> {
         self.elements.clone()
     }
     pub fn crs(&self) -> Option<Arc<Proj>> {
@@ -88,8 +89,13 @@ impl fmt::Display for Gr3ParserOutput {
             lines.push(format!("{} {}", crs_str, desc_str));
         };
 
-        lines.push(format!("{} {}", self.elements.len(), self.nodes.len()));
-        let mut fort_index_from_node_id = BTreeMap::new();
+        let ne = match &self.elements {
+            Some(elements) => elements.len(),
+            None => 0,
+        };
+
+        lines.push(format!("{} {}", ne, self.nodes.len()));
+        let mut fort_index_from_node_id = LinkedHashMap::new();
         for (local_index, (&node_id, (coord, value))) in self.nodes.iter().enumerate() {
             let fortran_index = local_index + 1;
             fort_index_from_node_id.insert(node_id, fortran_index);
@@ -108,27 +114,31 @@ impl fmt::Display for Gr3ParserOutput {
             ));
         }
 
-        for (local_index, (_element_id, element_indices)) in self.elements.iter().enumerate() {
-            let fortran_index = local_index + 1;
+        if self.elements.is_some() {
+            if let Some(elements) = &self.elements {
+                for (local_index, (_element_id, element_indices)) in elements.iter().enumerate() {
+                    let fortran_index = local_index + 1;
 
-            // Translate element node indices to their corresponding Fortran indices and build the element_str
-            let element_str = element_indices
-                .iter()
-                .map(|&element_index| {
-                    fort_index_from_node_id
-                        .get(&element_index)
-                        .expect("Expected node ID in map")
-                        .to_string()
-                })
-                .collect::<Vec<String>>()
-                .join(" ");
+                    // Translate element node indices to their corresponding Fortran indices and build the element_str
+                    let element_str = element_indices
+                        .iter()
+                        .map(|&element_index| {
+                            fort_index_from_node_id
+                                .get(&element_index)
+                                .expect("Expected node ID in map")
+                                .to_string()
+                        })
+                        .collect::<Vec<String>>()
+                        .join(" ");
 
-            lines.push(format!(
-                "{} {} {}",
-                fortran_index,
-                element_indices.len(),
-                element_str
-            ));
+                    lines.push(format!(
+                        "{} {} {}",
+                        fortran_index,
+                        element_indices.len(),
+                        element_str
+                    ));
+                }
+            }
         }
         if self.open_boundaries.is_some()
             || self.land_boundaries.is_some()
@@ -268,15 +278,32 @@ pub fn parse_from_url(url: &Url) -> Result<Gr3ParserOutput, Gr3ParserError> {
     parse_from_reader(reader, &url.to_string())
 }
 
+use gag::Gag;
+use std::sync::Mutex;
+
+// Global mutex to ensure only one thread redirects stderr at a time
+static STDERR_MUTEX: Mutex<()> = Mutex::new(());
+
+/// Safe wrapper around Proj::new() that silences stderr output
+fn proj_new_silent(definition: &str) -> Result<Proj, proj::ProjCreateError> {
+    let _guard = STDERR_MUTEX.lock().unwrap();
+
+    // Temporarily redirect stderr to nowhere
+    let _gag = Gag::stderr().ok();
+
+    // Call Proj::new() while stderr is silenced
+    Proj::new(definition)
+}
+
 fn get_proj_from_description(description: &str) -> Option<Proj> {
-    if let Ok(proj) = Proj::new(description) {
+    if let Ok(proj) = proj_new_silent(description) {
         return Some(proj);
     }
 
     let words: Vec<&str> = description.split_whitespace().collect();
     for i in 0..words.len() {
         let substr = words[i..].join(" ");
-        if let Ok(proj) = Proj::new(&substr) {
+        if let Ok(proj) = proj_new_silent(&substr) {
             return Some(proj);
         }
     }
@@ -285,21 +312,25 @@ fn get_proj_from_description(description: &str) -> Option<Proj> {
 }
 
 pub fn get_description_without_proj(description: &str) -> String {
-    if Proj::new(description).is_ok() {
+    // Early return if the full description is a valid PROJ string
+    if proj_new_silent(description).is_ok() {
         return String::new();
     }
 
     let words: Vec<&str> = description.split_whitespace().collect();
-    for i in 0..words.len() {
+
+    // Find the first index where the substring from that point is a valid PROJ string
+    if let Some(split_index) = (0..words.len()).find(|&i| {
         let substr = words[i..].join(" ");
-        if Proj::new(&substr).is_ok() {
-            return words[0..i].join(" ");
-        }
+        proj_new_silent(&substr).is_ok()
+    }) {
+        words[0..split_index].join(" ")
+    } else {
+        description.to_string()
     }
-    description.to_string() // If no Proj found, return the original description.
 }
 
-fn parse_from_reader<R: Read>(
+pub fn parse_from_reader<R: Read>(
     reader: BufReader<R>,
     fname: &str, // Passed separately for error messages
 ) -> Result<Gr3ParserOutput, Gr3ParserError> {
@@ -368,7 +399,7 @@ fn parse_from_reader<R: Read>(
             ));
         }
     };
-    let mut nodemap = BTreeMap::new();
+    let mut nodemap = LinkedHashMap::new();
     for _ in 0..np {
         let line = match buf.next() {
             Some(Ok(line)) => line,
@@ -476,7 +507,7 @@ fn parse_from_reader<R: Read>(
     }
     // let nodes = Nodes::new(nodemap, crs);
     log::info!("Start reading elements...");
-    let mut elemmap = BTreeMap::new();
+    let mut elemmap = LinkedHashMap::new();
     for _ in 0..ne {
         let line = match buf.next() {
             Some(Ok(line)) => line,
@@ -915,20 +946,30 @@ fn parse_from_reader<R: Read>(
     parsed_gr3_builder.nodes(nodemap);
     parsed_gr3_builder.crs(crs);
 
+    // When using derive-builder, even Optional must be set explicitly.
+
     if !elemmap.is_empty() {
         parsed_gr3_builder.elements(elemmap);
+    } else {
+        parsed_gr3_builder.elements(None);
     }
 
     if !open_boundaries_vec.is_empty() {
         parsed_gr3_builder.open_boundaries(open_boundaries_vec);
+    } else {
+        parsed_gr3_builder.open_boundaries(None);
     }
 
     if !land_boundaries_vec.is_empty() {
         parsed_gr3_builder.land_boundaries(land_boundaries_vec);
+    } else {
+        parsed_gr3_builder.land_boundaries(None);
     }
 
     if !interior_boundaries_vec.is_empty() {
         parsed_gr3_builder.interior_boundaries(interior_boundaries_vec);
+    } else {
+        parsed_gr3_builder.interior_boundaries(None);
     }
     log::debug!("Done with parsing full file!");
     Ok(parsed_gr3_builder.build()?)
@@ -940,4 +981,278 @@ pub fn write_to_path(path: &Path, gr3: &Gr3ParserOutput) -> std::io::Result<()> 
     writeln!(tmpfile, "{}", gr3)?;
     tmpfile.persist(path)?;
     Ok(())
+}
+
+impl Gr3ParserOutput {
+    /// Write the mesh data as a 2DM (SMS) format file
+    pub fn write_as_2dm(&self, path: &Path) -> std::io::Result<()> {
+        let temp_dir = path.parent().unwrap_or_else(|| Path::new("."));
+
+        let mut tmpfile = Builder::new()
+            .prefix("mesh_")
+            .suffix(".2dm")
+            .tempfile_in(temp_dir)?;
+
+        writeln!(tmpfile, "{}", self.to_2dm_string())?;
+        tmpfile.persist(path)?;
+        Ok(())
+    }
+
+    /// Convert the mesh data to 2DM format string
+    pub fn to_2dm_string(&self) -> String {
+        let mut output = String::new();
+
+        // Start with MESH2D header
+        output.push_str("MESH2D\n");
+
+        // Add triangular elements (E3T)
+        if let Some(elements) = &self.elements {
+            for (element_id, element_nodes) in elements.iter() {
+                if element_nodes.len() == 3 {
+                    output.push_str(&format!(
+                        "E3T {} {} {} {}\n",
+                        element_id, element_nodes[0], element_nodes[1], element_nodes[2]
+                    ));
+                }
+            }
+        }
+
+        // Add quadrilateral elements (E4Q)
+        if let Some(elements) = &self.elements {
+            for (element_id, element_nodes) in elements.iter() {
+                if element_nodes.len() == 4 {
+                    output.push_str(&format!(
+                        "E4Q {} {} {} {} {}\n",
+                        element_id,
+                        element_nodes[0],
+                        element_nodes[1],
+                        element_nodes[2],
+                        element_nodes[3]
+                    ));
+                }
+            }
+        }
+
+        // Add nodes (ND) with proper formatting
+        for (node_id, (coords, values)) in self.nodes.iter() {
+            let value = match values {
+                Some(v) if !v.is_empty() => v[0], // Use first value if available
+                _ => -99999.0,                    // Default value for missing data
+            };
+
+            output.push_str(&format!(
+                "ND {} {:<.16E} {:<.16E} {:<.16E}\n",
+                node_id, coords[0], coords[1], value
+            ));
+
+            // // Format coordinates and values to match SMS 2DM format
+            // // Use scientific notation with explicit + sign for exponent when needed
+            // let x_str = Self::format_coordinate(coords[0]);
+            // let y_str = Self::format_coordinate(coords[1]);
+            // let z_str = Self::format_coordinate(value);
+
+            // output.push_str(&format!("ND {} {} {} {}\n", node_id, x_str, y_str, z_str));
+        }
+
+        // Add boundaries
+        output.push_str(&self.boundaries_to_2dm_string());
+
+        output
+    }
+
+    /// Helper function to format coordinates in the SMS 2DM style
+    fn _format_coordinate(value: f64) -> String {
+        // Use Rust's standard scientific notation
+        let formatted = format!("{:.16E}", value);
+
+        // Convert to 2-digit exponent format required by SMS 2DM
+        if let Some(e_pos) = formatted.find('E') {
+            let (mantissa, exponent_part) = formatted.split_at(e_pos + 1);
+
+            // Handle different exponent formats
+            if exponent_part.len() == 2
+                && (exponent_part.starts_with('+') || exponent_part.starts_with('-'))
+            {
+                // E+1 or E-1 -> E+01 or E-01
+                let sign = &exponent_part[0..1];
+                let digit = &exponent_part[1..];
+                format!("{}{}0{}", mantissa, sign, digit)
+            } else if exponent_part.len() == 1 {
+                // E1 -> E+01
+                format!("{}+0{}", mantissa, exponent_part)
+            } else {
+                // Already in correct format (E+10, E-05, etc.)
+                formatted
+            }
+        } else {
+            formatted
+        }
+    }
+
+    /// Convert boundaries to 2DM nodestring format
+    fn boundaries_to_2dm_string(&self) -> String {
+        let mut output = String::new();
+
+        // Process open boundaries
+        if let Some(open_boundaries) = &self.open_boundaries {
+            for boundary in open_boundaries.iter() {
+                if !boundary.is_empty() {
+                    output.push_str("NS ");
+                    for i in 0..(boundary.len() - 1) {
+                        output.push_str(&format!("{} ", boundary[i]));
+                    }
+                    output.push_str(&format!("-{}\n", boundary[boundary.len() - 1]));
+                }
+            }
+        }
+
+        // Process land boundaries
+        if let Some(land_boundaries) = &self.land_boundaries {
+            for boundary in land_boundaries.iter() {
+                if !boundary.is_empty() {
+                    output.push_str("NS ");
+                    for i in 0..(boundary.len() - 1) {
+                        output.push_str(&format!("{} ", boundary[i]));
+                    }
+                    output.push_str(&format!("-{}\n", boundary[boundary.len() - 1]));
+                }
+            }
+        }
+
+        // Process interior boundaries
+        if let Some(interior_boundaries) = &self.interior_boundaries {
+            for boundary in interior_boundaries.iter() {
+                if !boundary.is_empty() {
+                    output.push_str("NS ");
+                    for i in 0..(boundary.len() - 1) {
+                        output.push_str(&format!("{} ", boundary[i]));
+                    }
+                    output.push_str(&format!("-{}\n", boundary[boundary.len() - 1]));
+                }
+            }
+        }
+
+        output
+    }
+}
+
+#[cfg(test)]
+mod tests_2dm {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_2dm_string_generation() {
+        // Create a simple test mesh
+        let mut nodes = LinkedHashMap::new();
+        nodes.insert(1, (vec![0.0, 0.0], Some(vec![-10.5])));
+        nodes.insert(2, (vec![1.0, 0.0], Some(vec![-12.3])));
+        nodes.insert(3, (vec![0.5, 1.0], Some(vec![-15.7])));
+        nodes.insert(4, (vec![1.5, 1.0], Some(vec![-18.2])));
+
+        let mut elements = LinkedHashMap::new();
+        elements.insert(1, vec![1, 2, 3]); // Triangle
+        elements.insert(2, vec![2, 4, 3]); // Triangle
+
+        let open_boundaries = vec![vec![1, 2]];
+
+        let gr3 = Gr3ParserOutputBuilder::default()
+            .description("Test mesh".to_string())
+            .nodes(nodes)
+            .elements(elements)
+            .crs(Some(Arc::new(Proj::new("epsg:6933").unwrap())))
+            .open_boundaries(None)
+            .land_boundaries(None)
+            .interior_boundaries(None)
+            .open_boundaries(open_boundaries)
+            .build()
+            .expect("Failed to build test GR3");
+
+        let sms2dm_string = gr3.to_2dm_string();
+
+        // Verify the output contains expected components
+        assert!(sms2dm_string.contains("MESH2D"));
+        assert!(sms2dm_string.contains("E3T 1 1 2 3"));
+        assert!(sms2dm_string.contains("E3T 2 2 4 3"));
+        assert!(sms2dm_string.contains("ND 1"));
+        assert!(sms2dm_string.contains("NS 1 -2"));
+
+        println!("Generated 2DM string:\n{}", sms2dm_string);
+    }
+
+    #[test]
+    fn test_write_2dm_file() {
+        // Create a simple test mesh
+        let mut nodes = LinkedHashMap::new();
+        nodes.insert(1, (vec![0.0, 0.0], Some(vec![-10.5])));
+        nodes.insert(2, (vec![1.0, 0.0], Some(vec![-12.3])));
+        nodes.insert(3, (vec![0.5, 1.0], Some(vec![-15.7])));
+
+        let mut elements = LinkedHashMap::new();
+        elements.insert(1, vec![1, 2, 3]); // Triangle
+
+        let gr3 = Gr3ParserOutputBuilder::default()
+            .description("Test mesh".to_string())
+            .nodes(nodes)
+            .elements(elements)
+            .crs(Some(Arc::new(Proj::new("epsg:6933").unwrap())))
+            .open_boundaries(None)
+            .land_boundaries(None)
+            .interior_boundaries(None)
+            .build()
+            .expect("Failed to build test GR3");
+
+        // Create a temporary directory and file
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("test_mesh.2dm");
+
+        // Write the 2DM file
+        let result = gr3.write_as_2dm(&file_path);
+        assert!(result.is_ok(), "Writing 2DM file should succeed");
+
+        // Verify the file exists and has content
+        assert!(file_path.exists(), "2DM file should exist");
+
+        let content =
+            std::fs::read_to_string(&file_path).expect("Should be able to read the 2DM file");
+        assert!(content.contains("MESH2D"));
+        assert!(content.contains("E3T"));
+        assert!(content.contains("ND"));
+
+        println!("2DM file written successfully to: {:?}", file_path);
+    }
+
+    #[test]
+    fn test_mixed_element_2dm() {
+        // Create a mesh with both triangles and quads
+        let mut nodes = LinkedHashMap::new();
+        for i in 1..=6 {
+            nodes.insert(i, (vec![i as f64, 0.0], Some(vec![-10.0 - i as f64])));
+        }
+
+        let mut elements = LinkedHashMap::new();
+        elements.insert(1, vec![1, 2, 3]); // Triangle
+        elements.insert(2, vec![2, 4, 5, 3]); // Quad
+        elements.insert(3, vec![4, 6, 5]); // Triangle
+
+        let gr3 = Gr3ParserOutputBuilder::default()
+            .description("Mixed element mesh".to_string())
+            .nodes(nodes)
+            .elements(elements)
+            .crs(Some(Arc::new(Proj::new("epsg:6933").unwrap())))
+            .open_boundaries(None)
+            .land_boundaries(None)
+            .interior_boundaries(None)
+            .build()
+            .expect("Failed to build test GR3");
+
+        let sms2dm_string = gr3.to_2dm_string();
+
+        // Verify both element types are present
+        assert!(sms2dm_string.contains("E3T 1 1 2 3"));
+        assert!(sms2dm_string.contains("E4Q 2 2 4 5 3"));
+        assert!(sms2dm_string.contains("E3T 3 4 6 5"));
+
+        println!("Mixed element 2DM string:\n{}", sms2dm_string);
+    }
 }
