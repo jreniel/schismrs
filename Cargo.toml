@@ -6,3 +6,6 @@ members = [
     "src/storm_events",
     # "src/bctides",
 ]
+
+[patch."https://github.com/jreniel/schismrs-hgrid.git"]
+schismrs-hgrid = { path = "src/hgrid" }

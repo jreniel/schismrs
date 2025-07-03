@@ -2822,25 +2822,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "schismrs-hgrid"
-version = "0.1.0"
-source = "git+https://github.com/jreniel/schismrs-hgrid.git#0d8c35711229a989211f1c5eae066a4c14ae6875"
-dependencies = [
- "derive_builder 0.12.0",
- "gag",
- "linked-hash-map",
- "log",
- "ndarray",
- "proj",
- "reqwest",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "url",
- "vergen",
-]
-
-[[package]]
 name = "schismrs-vgrid"
 version = "0.1.0"
 dependencies = [
@@ -2856,7 +2837,7 @@ dependencies = [
  "plotly",
  "pretty_env_logger",
  "rayon",
- "schismrs-hgrid 0.1.0 (git+https://github.com/jreniel/schismrs-hgrid.git)",
+ "schismrs-hgrid",
  "thiserror 1.0.69",
 ]
 
