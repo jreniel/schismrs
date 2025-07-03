@@ -8,15 +8,8 @@ use schismrs_vgrid::vqs::{VQSAutoBuilder, VQSBuilder, VQSKMeansBuilder};
 use std::process::ExitCode;
 use std::{error::Error, path::PathBuf};
 
-const VERSION: &'static str = concat! {
-    env! {"CARGO_PKG_VERSION"},
-    "-",
-    env! {"VERGEN_GIT_DESCRIBE"}
-};
-
 #[derive(Parser, Debug)]
 #[command(author, about, long_about = None)]
-#[command(version = VERSION)]
 struct Cli {
     hgrid_path: PathBuf,
     #[clap(short, long)]
@@ -38,18 +31,20 @@ struct Cli {
         long,
         help = "Range is (0., 20.]. Values closer to 0. make the transformation \
                 more similar to traditional sigma. Larger values will increase \
-                resolution at the top and bottom."
+                resolution at the top and bottom. If zeo is used, it uses f32::EPSILON.",
+        default_value = "0.000001"
     )]
     theta_f: Option<f64>,
     #[clap(
         long,
         help = "Range is [0., 1.]. For values closer to 0. the surface is \
                 resolved. For values closer to 1., but the surface and bottom \
-                are resolved."
+                are resolved.",
+        default_value = "0.5"
     )]
     theta_b: Option<f64>,
     #[clap(long)]
-    dz_bottom_min: f64,
+    dz_bottom_min: Option<f64>,
     #[clap(long, action)]
     show_zmas_plot: bool,
     #[clap(long)]
@@ -78,12 +73,21 @@ enum Modes {
 
 #[derive(Args, Debug)]
 struct KmeansCliOpts {
-    #[clap(short, long)]
+    #[clap(short, long, help = "Number of clusters. Must be an interger >= 1")]
     clusters: usize,
-    #[clap(short, long, default_value = "2")]
+    #[clap(
+        short,
+        long,
+        default_value = "2",
+        help = "Controls the initial number of layers. Must be an integer >= 2."
+    )]
     shallow_levels: Option<usize>,
-    #[clap(long)]
-    max_levels: usize,
+    #[clap(
+        long,
+        help = "Controls the maximum number of layers in the clustering hierarchy. \
+                Defaults to shallow_levels + clusters - 1"
+    )]
+    max_levels: Option<usize>,
 }
 
 #[derive(Args, Debug)]
@@ -96,7 +100,7 @@ struct HsmCliOpts {
 
 #[derive(Args, Debug)]
 struct AutoCliOpts {
-    #[clap(long)]
+    #[clap(long, help = "Number of master grids to generate. Must be an int >= 1")]
     ngrids: usize,
     #[clap(
         long,
@@ -104,10 +108,19 @@ struct AutoCliOpts {
         help = "This is the first depth below etal. This input is positive down."
     )]
     initial_depth: Option<f64>,
-    #[clap(long, default_value = "2")]
+    #[clap(
+        short,
+        long,
+        default_value = "2",
+        help = "Controls the initial number of layers. Must be an integer >= 2."
+    )]
     shallow_levels: Option<usize>,
-    #[clap(long)]
-    max_levels: usize,
+    #[clap(
+        long,
+        help = "Controls the maximum number of layers in the clustering hierarchy. \
+                Defaults to shallow_levels + clusters - 1"
+    )]
+    max_levels: Option<usize>,
 }
 
 fn entrypoint() -> Result<(), Box<dyn Error>> {
@@ -134,24 +147,31 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
         }
     };
     let vqs = match &cli.mode {
-        Modes::Hsm(opts) => VQSBuilder::default()
-            .hgrid(&hgrid)
-            .depths(&opts.depths)
-            .nlevels(&opts.nlevels)
-            .stretching(&transform)
-            .dz_bottom_min(&cli.dz_bottom_min)
-            .build()?,
+        Modes::Hsm(opts) => {
+            let mut builder = VQSBuilder::default();
+            builder.hgrid(&hgrid);
+            builder.depths(&opts.depths);
+            builder.nlevels(&opts.nlevels);
+            if cli.dz_bottom_min.is_some() {
+                builder.dz_bottom_min(cli.dz_bottom_min.as_ref().unwrap());
+            }
+            builder.build()?
+        }
         Modes::Kmeans(opts) => {
             let mut builder = VQSKMeansBuilder::default();
             builder.hgrid(&hgrid);
             builder.stretching(&transform);
             builder.nclusters(&opts.clusters);
-            builder.dz_bottom_min(&cli.dz_bottom_min);
+            if cli.dz_bottom_min.is_some() {
+                builder.dz_bottom_min(cli.dz_bottom_min.as_ref().unwrap());
+            }
             builder.etal(cli.etal.as_ref().unwrap());
             if let Some(shallow_levels) = &opts.shallow_levels {
                 builder.shallow_levels(shallow_levels);
             }
-            builder.max_levels(&opts.max_levels);
+            if let Some(max_levels) = &opts.max_levels {
+                builder.max_levels(max_levels);
+            }
             builder.build()?
         }
         Modes::Auto(opts) => {
@@ -159,10 +179,14 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
             builder.hgrid(&hgrid);
             builder.stretching(&transform);
             builder.ngrids(&opts.ngrids);
-            builder.dz_bottom_min(&cli.dz_bottom_min);
+            if cli.dz_bottom_min.is_some() {
+                builder.dz_bottom_min(cli.dz_bottom_min.as_ref().unwrap());
+            }
             builder.initial_depth(&opts.initial_depth.as_ref().unwrap());
             builder.shallow_levels(&opts.shallow_levels.as_ref().unwrap());
-            builder.max_levels(&opts.max_levels);
+            if let Some(max_levels) = &opts.max_levels {
+                builder.max_levels(max_levels);
+            }
             builder.build()?
         }
     };
@@ -172,8 +196,13 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
 
     if cli.show_zmas_plot || cli.save_zmas_plot.is_some() {
         let zmas_plot = vqs.make_z_mas_plot()?;
+        if let Some(save_path) = &cli.save_zmas_plot {
+            zmas_plot.write_html(save_path);
+        }
         if cli.show_zmas_plot {
+            println!("should showw");
             zmas_plot.show();
+            println!("done showing");
         }
     }
     Ok(())
