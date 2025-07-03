@@ -1,0 +1,12 @@
+; DO NOT EDIT (unless you know what you are doing)
+;
+; This subdirectory is a git "subrepo", and this file is maintained by the
+; git-subrepo command. See https://github.com/ingydotnet/git-subrepo#readme
+;
+[subrepo]
+	remote = git@github.com:jreniel/schismrs-hgrid.git
+	branch = main
+	commit = 0d8c35711229a989211f1c5eae066a4c14ae6875
+	parent = e27325c32f25d5d3b4fda2dfdd5523f30c7f4e39
+	method = merge
+	cmdver = 0.4.9

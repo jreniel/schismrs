@@ -1,0 +1,12 @@
+; DO NOT EDIT (unless you know what you are doing)
+;
+; This subdirectory is a git "subrepo", and this file is maintained by the
+; git-subrepo command. See https://github.com/ingydotnet/git-subrepo#readme
+;
+[subrepo]
+	remote = git@github.com:jreniel/stormeventrs.git
+	branch = main
+	commit = 5964932a373813df347ee1cb46154aee1f5e824b
+	parent = f12891303d3ca34b2e084923ff428446604086e8
+	method = merge
+	cmdver = 0.4.5

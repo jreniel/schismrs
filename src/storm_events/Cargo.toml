@@ -1,0 +1,20 @@
+[package]
+name = "storm_events"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+chrono = "0.4.34"
+clap = { version = "4.4.18", features = ["derive"] }
+datetime = "0.5.2"
+derive_builder = { version = "0.13.0", features = ["clippy"] }
+flate2 = "1.0.28"
+polars = "0.37.0"
+polars-lazy = "0.37.0"
+regex = "1.10.3"
+reqwest = { version = "0.11.24", features = ["blocking"] }
+smartstring = "1.0.1"
+thiserror = "1.0.56"
+url = "2.5.0"
