@@ -6,7 +6,7 @@
 [subrepo]
 	remote = git@github.com:jreniel/schismrs-bctides.git
 	branch = main
-	commit = c7c7b6167dbec7c5a2e631e3525378f743830298
-	parent = c3441f2935e14c1f815d3c41b20eb169064d4501
+	commit = 24317444fde00d199a380f6cf7fb8a216adfc070
+	parent = 02dbb9b68674fb969eed2568a8d910c72822dce0
 	method = merge
-	cmdver = 0.4.9
+	cmdver = 0.4.5

@@ -10,13 +10,14 @@ use clap::Parser;
 use humantime;
 use linked_hash_map::LinkedHashMap;
 use regex::Regex;
-use schismrs_bctides::bctides::BctidesBuilder;
-use schismrs_bctides::bctides::BoundaryForcingConfigBuilder;
 use schismrs_bctides::tides;
-use schismrs_bctides::ElevationConfig;
-use schismrs_bctides::SalinityConfig;
-use schismrs_bctides::TemperatureConfig;
-use schismrs_bctides::VelocityConfig;
+use schismrs_bctides::BctidesBuilder;
+// Updated imports to match the new API
+use schismrs_bctides::config::{
+    ConstituentPreset, ConstituentSelection, ConstituentsConfigInput, ElevationForcingConfigInput,
+    OpenBoundaryForcingConfig, OpenBoundaryForcings, SalinityForcingConfigInput,
+    TemperatureForcingConfigInput, TidesConfigInput, VelocityForcingConfigInput,
+};
 use schismrs_hgrid::Hgrid;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -50,7 +51,7 @@ thread_local! {
     \tRequired if using elevation or velocity of types 3 or 5\n  \
     \x1b[1m--<VARIABLE_NAME>-baroclinic-db-<BOUNDARY_ID>=<BAROCLINIC_DATABASE_NAME>\x1b[0m\n  \
     \tRequired if using elevation, velocity of types 4 or 5, if using velocity type -4 or -5, or if using salinity or temperature of type 5.\n  \
-    \nBoundary ID's begin at 1 as per the convention of hgrid files.\n\n\
+    \nFor this emtrypoint, boundary ID's begin at 1 as per the convention of hgrid files (although internally they are represented as 0-indexed vectors). \n\n\
     The following tables describe each variable and associated types:\n\n\
 | Variable     | Type 1 (`*.th`)                                                       |
 |--------------|-----------------------------------------------------------------------|
@@ -117,10 +118,10 @@ struct Cli {
 
 #[derive(Debug)]
 struct BoundaryConfigArgs {
-    elevation: Option<BTreeMap<u32, ElevationConfig>>,
-    velocity: Option<BTreeMap<u32, VelocityConfig>>,
-    temperature: Option<BTreeMap<u32, TemperatureConfig>>,
-    salinity: Option<BTreeMap<u32, SalinityConfig>>,
+    elevation: Option<BTreeMap<u32, ElevationForcingConfigInput>>,
+    velocity: Option<BTreeMap<u32, VelocityForcingConfigInput>>,
+    temperature: Option<BTreeMap<u32, TemperatureForcingConfigInput>>,
+    salinity: Option<BTreeMap<u32, SalinityForcingConfigInput>>,
 }
 
 impl BoundaryConfigArgs {
@@ -129,7 +130,7 @@ impl BoundaryConfigArgs {
         key_str: &str,
         fort_id: &str,
         bnd_key: &u32,
-    ) -> ElevationConfig {
+    ) -> ElevationForcingConfigInput {
         let user_value = matches.get_one::<String>(&key_str).unwrap();
         let elev_map = get_elevation_bctypes_map();
         let the_requested_type = elev_map.get(user_value).unwrap();
@@ -146,11 +147,11 @@ impl BoundaryConfigArgs {
                         .get_one::<bool>(&format!("elevation-{}-minor", fort_id))
                         .unwrap(),
                 ) {
-                    (true, false, false) => tides::ConstituentsConfig::all(),
-                    (false, true, false) => tides::ConstituentsConfig::major(),
-                    (false, false, true) => tides::ConstituentsConfig::minor(),
+                    (true, false, false) => ConstituentSelection::Preset(ConstituentPreset::All),
+                    (false, true, false) => ConstituentSelection::Preset(ConstituentPreset::Major),
+                    (false, false, true) => ConstituentSelection::Preset(ConstituentPreset::Minor),
                     (false, false, false) => {
-                        let mut ec = tides::ConstituentsConfig::default();
+                        let mut ec = ConstituentsConfigInput::default();
                         for constituent_name in tides::ConstituentsConfig::field_names().iter() {
                             let constituent_flag_base_name = get_constituent_flag_base_name(
                                 bnd_key,
@@ -158,13 +159,31 @@ impl BoundaryConfigArgs {
                                 &constituent_name,
                             );
                             match matches.get_one::<bool>(constituent_flag_base_name).unwrap() {
-                                true => ec.set_by_name(constituent_name, true),
+                                true => {
+                                    // Set the constituent field to true using reflection or match
+                                    match constituent_name.as_ref() {
+                                        "Q1" => ec.Q1 = true,
+                                        "O1" => ec.O1 = true,
+                                        "P1" => ec.P1 = true,
+                                        "K1" => ec.K1 = true,
+                                        "N2" => ec.N2 = true,
+                                        "M2" => ec.M2 = true,
+                                        "S2" => ec.S2 = true,
+                                        "K2" => ec.K2 = true,
+                                        "Mm" => ec.Mm = true,
+                                        "Mf" => ec.Mf = true,
+                                        "M4" => ec.M4 = true,
+                                        "MN4" => ec.MN4 = true,
+                                        "MS4" => ec.MS4 = true,
+                                        "_2N2" => ec._2N2 = true,
+                                        "S1" => ec.S1 = true,
+                                        _ => {}
+                                    }
+                                }
                                 false => {}
                             }
-                            // if we wanted to add arbitrary frequencies here would be
-                            // the place
                         }
-                        ec
+                        ConstituentSelection::Custom { constituents: ec }
                     }
                     (_, _, _) => panic!("Unreachable!"),
                 };
@@ -178,11 +197,11 @@ impl BoundaryConfigArgs {
                         },
                         None => panic!("Unreachable"),
                     };
-                let tides = tides::TidesConfig {
-                    constituents,
+                let tides_config = TidesConfigInput {
                     database,
+                    constituents,
                 };
-                let database = match matches
+                let time_series_database = match matches
                     .get_one::<String>(&format!("elevation-{}-baroclinic-db", fort_id))
                 {
                     Some(tidal_db) => match get_baroclinic_db_possible_values_map().get(tidal_db) {
@@ -191,18 +210,21 @@ impl BoundaryConfigArgs {
                     },
                     None => panic!("Unreachable"),
                 };
-                let time_series = tides::SpaceVaryingTimeSeriesConfig { database };
-                ElevationConfig::TidesAndSpaceVaryingTimeSeries { tides, time_series }
+                ElevationForcingConfigInput::TidesAndSpaceVaryingTimeSeries {
+                    tides: tides_config,
+                    time_series: time_series_database,
+                }
             }
             _ => panic!("Unhandled type: {:?}", the_requested_type),
         }
     }
+
     fn get_velocity_config(
         matches: &ArgMatches,
         key_str: &str,
         fort_id: &str,
         bnd_key: &u32,
-    ) -> VelocityConfig {
+    ) -> VelocityForcingConfigInput {
         let user_value = matches.get_one::<String>(&key_str).unwrap();
         let velo_map = get_velocity_bctypes_map();
         let the_requested_type = velo_map.get(user_value).unwrap();
@@ -219,11 +241,11 @@ impl BoundaryConfigArgs {
                         .get_one::<bool>(&format!("velocity-{}-minor", fort_id))
                         .unwrap(),
                 ) {
-                    (true, false, false) => tides::ConstituentsConfig::all(),
-                    (false, true, false) => tides::ConstituentsConfig::major(),
-                    (false, false, true) => tides::ConstituentsConfig::minor(),
+                    (true, false, false) => ConstituentSelection::Preset(ConstituentPreset::All),
+                    (false, true, false) => ConstituentSelection::Preset(ConstituentPreset::Major),
+                    (false, false, true) => ConstituentSelection::Preset(ConstituentPreset::Minor),
                     (false, false, false) => {
-                        let mut ec = tides::ConstituentsConfig::default();
+                        let mut ec = ConstituentsConfigInput::default();
                         for constituent_name in tides::ConstituentsConfig::field_names().iter() {
                             let constituent_flag_base_name = get_constituent_flag_base_name(
                                 bnd_key,
@@ -231,13 +253,31 @@ impl BoundaryConfigArgs {
                                 &constituent_name,
                             );
                             match matches.get_one::<bool>(constituent_flag_base_name).unwrap() {
-                                true => ec.set_by_name(constituent_name, true),
+                                true => {
+                                    // Set the constituent field to true using match
+                                    match constituent_name.as_ref() {
+                                        "Q1" => ec.Q1 = true,
+                                        "O1" => ec.O1 = true,
+                                        "P1" => ec.P1 = true,
+                                        "K1" => ec.K1 = true,
+                                        "N2" => ec.N2 = true,
+                                        "M2" => ec.M2 = true,
+                                        "S2" => ec.S2 = true,
+                                        "K2" => ec.K2 = true,
+                                        "Mm" => ec.Mm = true,
+                                        "Mf" => ec.Mf = true,
+                                        "M4" => ec.M4 = true,
+                                        "MN4" => ec.MN4 = true,
+                                        "MS4" => ec.MS4 = true,
+                                        "_2N2" => ec._2N2 = true,
+                                        "S1" => ec.S1 = true,
+                                        _ => {}
+                                    }
+                                }
                                 false => {}
                             }
-                            // if we wanted to add arbitrary frequencies here would be
-                            // the place
                         }
-                        ec
+                        ConstituentSelection::Custom { constituents: ec }
                     }
                     (_, _, _) => panic!("Unreachable!"),
                 };
@@ -251,11 +291,11 @@ impl BoundaryConfigArgs {
                         },
                         None => panic!("Unreachable"),
                     };
-                let tides = tides::TidesConfig {
-                    constituents,
+                let tides_config = TidesConfigInput {
                     database,
+                    constituents,
                 };
-                let database = match matches
+                let time_series_database = match matches
                     .get_one::<String>(&format!("velocity-{}-baroclinic-db", fort_id))
                 {
                     Some(tidal_db) => match get_baroclinic_db_possible_values_map().get(tidal_db) {
@@ -264,18 +304,21 @@ impl BoundaryConfigArgs {
                     },
                     None => panic!("Unreachable"),
                 };
-                let time_series = tides::SpaceVaryingTimeSeriesConfig { database };
-                VelocityConfig::TidesAndSpaceVaryingTimeSeries { tides, time_series }
+                VelocityForcingConfigInput::TidesAndSpaceVaryingTimeSeries {
+                    tides: tides_config,
+                    time_series: time_series_database,
+                }
             }
             _ => panic!("Unhandled type: {:?}", the_requested_type),
         }
     }
+
     fn get_temperature_config(
         matches: &ArgMatches,
         key_str: &str,
-        fort_id: &str,
-        bnd_key: &u32,
-    ) -> TemperatureConfig {
+        _fort_id: &str,
+        _bnd_key: &u32,
+    ) -> TemperatureForcingConfigInput {
         let user_value = matches.get_one::<String>(&key_str).unwrap();
         let tem_map = get_temperature_bctypes_map();
         let the_requested_type = tem_map.get(user_value).unwrap();
@@ -283,12 +326,13 @@ impl BoundaryConfigArgs {
             _ => panic!("Unhandled type: {:?}", the_requested_type),
         }
     }
+
     fn get_salinity_config(
         matches: &ArgMatches,
         key_str: &str,
-        fort_id: &str,
-        bnd_key: &u32,
-    ) -> SalinityConfig {
+        _fort_id: &str,
+        _bnd_key: &u32,
+    ) -> SalinityForcingConfigInput {
         let user_value = matches.get_one::<String>(&key_str).unwrap();
         let salt_map = get_salinity_bctypes_map();
         let the_requested_type = salt_map.get(user_value).unwrap();
@@ -305,10 +349,10 @@ impl FromArgMatches for BoundaryConfigArgs {
     }
 
     fn from_arg_matches_mut(matches: &mut ArgMatches) -> Result<Self, clap::error::Error> {
-        let mut elevation_map = BTreeMap::<u32, ElevationConfig>::new();
-        let mut velocity_map = BTreeMap::<u32, VelocityConfig>::new();
-        let mut temperature_map = BTreeMap::<u32, TemperatureConfig>::new();
-        let mut salinity_map = BTreeMap::<u32, SalinityConfig>::new();
+        let mut elevation_map = BTreeMap::<u32, ElevationForcingConfigInput>::new();
+        let mut velocity_map = BTreeMap::<u32, VelocityForcingConfigInput>::new();
+        let mut temperature_map = BTreeMap::<u32, TemperatureForcingConfigInput>::new();
+        let mut salinity_map = BTreeMap::<u32, SalinityForcingConfigInput>::new();
         let ele_re = Regex::new(r"elevation-(\d+)$").unwrap();
         let vel_re = Regex::new(r"velocity-(\d+)$").unwrap();
         let tem_re = Regex::new(r"temperature-(\d+)$").unwrap();
@@ -321,6 +365,7 @@ impl FromArgMatches for BoundaryConfigArgs {
                 tem_re.captures(&key_str),
                 sal_re.captures(&key_str),
             ) {
+                // Here we transform from fort_id representation to 0-index
                 (Some(caps), None, None, None) => {
                     let fort_id = caps.get(1).unwrap().as_str();
                     let bnd_key = fort_id.parse::<u32>().unwrap() - 1;
@@ -388,19 +433,11 @@ impl FromArgMatches for BoundaryConfigArgs {
     }
     fn update_from_arg_matches(&mut self, _matches: &ArgMatches) -> Result<(), clap::error::Error> {
         panic!("You should not directly call BoundaryConfigArgs::update_from_arg_matches");
-        // let mut matches = matches.clone();
-        // self.update_from_arg_matches_mut(&mut matches)
     }
     fn update_from_arg_matches_mut(
         &mut self,
         _matches: &mut ArgMatches,
     ) -> Result<(), clap::error::Error> {
-        // self.foo |= matches.get_flag("foo");
-        // self.bar |= matches.get_flag("bar");
-        // if let Some(quuz) = matches.remove_one::<String>("quuz") {
-        //     self.quuz = Some(quuz);
-        // }
-        // Ok(())
         panic!("You should not directly call BoundaryConfigArgs::update_from_arg_matches_mut")
     }
 }
@@ -719,22 +756,21 @@ impl Args for BoundaryConfigArgs {
                                 .long(all_tidal_constituents_base_name)
                                 .action(clap::ArgAction::SetTrue)
                                 .conflicts_with(major_tidal_constituents_base_name)
-                                .conflicts_with(minor_tidal_constituents_base_name), // .required(is_required_flag),
-                                                                                     // .required(is_required_flag),
+                                .conflicts_with(minor_tidal_constituents_base_name),
                         );
                         cmd = cmd.arg(
                             Arg::new(major_tidal_constituents_base_name)
                                 .long(major_tidal_constituents_base_name)
                                 .action(clap::ArgAction::SetTrue)
                                 .conflicts_with(all_tidal_constituents_base_name)
-                                .conflicts_with(minor_tidal_constituents_base_name), // .required(is_required_flag),
+                                .conflicts_with(minor_tidal_constituents_base_name),
                         );
                         cmd = cmd.arg(
                             Arg::new(minor_tidal_constituents_base_name)
                                 .long(minor_tidal_constituents_base_name)
                                 .action(clap::ArgAction::SetTrue)
                                 .conflicts_with(all_tidal_constituents_base_name)
-                                .conflicts_with(major_tidal_constituents_base_name), // .required(is_required_flag),
+                                .conflicts_with(major_tidal_constituents_base_name),
                         );
                         let constituents_name_iter = match var {
                             PossibleBoundaryVariables::Elevation => {
@@ -757,7 +793,7 @@ impl Args for BoundaryConfigArgs {
                                     .action(clap::ArgAction::SetTrue)
                                     .conflicts_with(all_tidal_constituents_base_name)
                                     .conflicts_with(major_tidal_constituents_base_name)
-                                    .conflicts_with(minor_tidal_constituents_base_name), // .required(is_required_flag),
+                                    .conflicts_with(minor_tidal_constituents_base_name),
                             );
                         }
                     }
@@ -808,60 +844,101 @@ impl Args for BoundaryConfigArgs {
         cmd
     }
     fn augment_args_for_update(_cmd: Command) -> Command {
-        panic!("You should not call this function!")
+        unimplemented!()
     }
 }
 
 fn entrypoint() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let hgrid = HGRID.with(|h| h.borrow().clone()).unwrap();
-    let mut builder = BoundaryForcingConfigBuilder::default();
-    builder.hgrid(&hgrid);
-    match &cli.boundary_config.elevation {
-        Some(cfg) => {
-            builder.elevation(cfg);
+
+    // Build the boundary forcing configuration using the new API
+    let mut boundary_configs = BTreeMap::new();
+
+    // Create per-boundary configurations
+    let num_boundaries = hgrid
+        .boundaries()
+        .and_then(|b| b.open())
+        .map(|ob| ob.nodes_ids().len())
+        .unwrap_or(0);
+
+    for boundary_id in 0..num_boundaries {
+        let boundary_id = boundary_id as u32;
+        let mut config = OpenBoundaryForcingConfig::default();
+
+        // Set elevation forcing if present
+        if let Some(ref elevation_map) = cli.boundary_config.elevation {
+            if let Some(elevation_config) = elevation_map.get(&boundary_id) {
+                config.elevation = Some(elevation_config.clone());
+            }
         }
-        None => {}
-    }
-    match &cli.boundary_config.velocity {
-        Some(cfg) => {
-            builder.velocity(cfg);
+
+        // Set velocity forcing if present
+        if let Some(ref velocity_map) = cli.boundary_config.velocity {
+            if let Some(velocity_config) = velocity_map.get(&boundary_id) {
+                config.velocity = Some(velocity_config.clone());
+            }
         }
-        None => {}
-    }
-    match &cli.boundary_config.temperature {
-        Some(cfg) => {
-            builder.temperature(cfg);
+
+        // Set temperature forcing if present
+        if let Some(ref temperature_map) = cli.boundary_config.temperature {
+            if let Some(temperature_config) = temperature_map.get(&boundary_id) {
+                config.temperature = Some(temperature_config.clone());
+            }
         }
-        None => {}
-    }
-    match &cli.boundary_config.salinity {
-        Some(cfg) => {
-            builder.salinity(cfg);
+
+        // Set salinity forcing if present
+        if let Some(ref salinity_map) = cli.boundary_config.salinity {
+            if let Some(salinity_config) = salinity_map.get(&boundary_id) {
+                config.salinity = Some(salinity_config.clone());
+            }
         }
-        None => {}
+
+        // Only add to map if any forcing is configured
+        if config.elevation.is_some()
+            || config.velocity.is_some()
+            || config.temperature.is_some()
+            || config.salinity.is_some()
+        {
+            boundary_configs.insert(boundary_id, config);
+        }
     }
-    let boundary_forcing_config = builder.build()?;
+
+    // Create the boundary forcing configuration
+    let boundary_forcing_config = if boundary_configs.is_empty() {
+        // No boundary configurations specified
+        OpenBoundaryForcings::PerBoundary(BTreeMap::new())
+    } else {
+        OpenBoundaryForcings::PerBoundary(boundary_configs)
+    };
+
     let mut builder = BctidesBuilder::default();
     let run_duration =
         Duration::try_seconds(cli.run_duration.as_secs().try_into().unwrap()).unwrap();
     let bctides = builder
         .start_date(&cli.start_date)
+        .hgrid(&hgrid)
         .run_duration(&run_duration)
-        .tidal_potential_cutoff_depth(&cli.tidal_potential_cutoff_depth)
-        .boundary_forcing_config(&boundary_forcing_config)
+        .tidal_potential_cutoff_depth(cli.tidal_potential_cutoff_depth)
+        .open_boundary_forcing_config(&boundary_forcing_config)
         .build()?;
     println!("{}", &bctides);
     Ok(())
 }
 
 fn main() -> ExitCode {
-    let exit_code = match entrypoint() {
+    match entrypoint() {
         Err(e) => {
             eprintln!("Error: {}", e);
-            return ExitCode::FAILURE;
+            // Print the error chain for better debugging
+            let mut source = e.source();
+            while let Some(err) = source {
+                eprintln!("  Caused by: {}", err);
+                source = err.source();
+            }
+            ExitCode::FAILURE
         }
         Ok(_) => ExitCode::SUCCESS,
-    };
-    exit_code
+    }
 }
+

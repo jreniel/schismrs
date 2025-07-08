@@ -1,4 +1,3 @@
-
 use linked_hash_set::LinkedHashSet;
 use std::iter::zip;
 
@@ -8,7 +7,7 @@ static MINOR_CONSTITUENTS: &[&'static str] = &["Mm", "Mf", "M4", "MN4", "MS4", "
 macro_rules! define_constituents_config {
     ( $( $name:ident ),* ) => {
         #[allow(non_snake_case)]
-        #[derive(Default, Debug)]
+        #[derive(Default, Debug, Clone)]
         pub struct ConstituentsConfig {
             $( pub $name: bool, )*
         }
@@ -94,32 +93,35 @@ define_constituents_config! {
     Q1, O1, P1, K1, N2, M2, S2, K2, Mm, Mf, M4, MN4, MS4, _2N2, S1
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TidalDatabase {
     TPXO,
     HAMTIDE,
     FES,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TimeSeriesDatabase {
     HYCOM,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TidesConfig {
     pub constituents: ConstituentsConfig,
     pub database: TidalDatabase,
 }
 
-#[derive(Debug)]
+impl TidesConfig {
+    pub fn get_active_forcing_constituents(&self) -> LinkedHashSet<String> {
+        self.constituents.get_active_forcing_constituents()
+    }
+    pub fn get_active_potential_constituents(&self) -> LinkedHashSet<String> {
+        self.constituents.get_active_potential_constituents()
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct SpaceVaryingTimeSeriesConfig {
     // pub data: BTreeMap<u32, BTreeMap<DateTime<Utc>, f64>>,
     pub database: TimeSeriesDatabase,
 }
-
-// impl SpaceVaryingTimeSeriesConfig {
-//     fn from_database(database: &TimeSeriesDatabase) -> Self {
-//         Self { data, database }
-//     }
-// }
