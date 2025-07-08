@@ -4,7 +4,7 @@ members = [
     "src/vgrid",
     "src/hgrid",
     "src/storm_events",
-    # "src/bctides",
+    "src/bctides",
 ]
 
 [patch."https://github.com/jreniel/schismrs-hgrid.git"]
