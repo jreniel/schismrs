@@ -5,7 +5,17 @@ members = [
     "src/hgrid",
     "src/storm_events",
     "src/bctides",
+    # "src/schism-sys",
 ]
 
 [patch."https://github.com/jreniel/schismrs-hgrid.git"]
 schismrs-hgrid = { path = "src/hgrid" }
+
+[patch."https://github.com/jreniel/schismrs-vgrid.git"]
+schismrs-vgrid = { path = "src/vgrid" }
+
+[patch."https://github.com/jreniel/stormeventsrs.git"]
+storm_events = { path = "src/storm_events" }
+
+[patch."https://github.com/jreniel/schismrs-bctides.git"]
+schismrs-bctides = { path = "src/bctides" }
