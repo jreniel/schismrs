@@ -6,7 +6,7 @@
 [subrepo]
 	remote = git@github.com:jreniel/schismrs-vgrid.git
 	branch = main
-	commit = 36c01a79163bea2b33a16deadf094dde58f25ace
-	parent = 27df866b9815ad9cc42fdc83a18792eb97c736f8
+	commit = d09b8d7c1664e0a58c96eb5237ca59690dd9b93a
+	parent = c7c2bfbbe339a64906e98b16dd0388d09d755241
 	method = merge
 	cmdver = 0.4.9
