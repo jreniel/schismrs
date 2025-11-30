@@ -381,7 +381,7 @@ pub struct BctidesBuilder<'a> {
 }
 
 impl<'a> BctidesBuilder<'a> {
-    pub fn build(&self) -> Result<Bctides, BctidesBuilderError> {
+    pub fn build(&self) -> Result<Bctides<'a>, BctidesBuilderError> {
         let start_date = self.start_date.ok_or_else(|| {
             BctidesBuilderError::UninitializedFieldError("start_date".to_string())
         })?;
