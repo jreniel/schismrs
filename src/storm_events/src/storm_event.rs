@@ -1,6 +1,5 @@
 use crate::atcf::ATCFFileDeck;
 use chrono::{Datelike, Utc};
-use datetime::Year;
 use flate2::read::GzDecoder;
 use polars::frame::DataFrame;
 use polars::prelude::*;
@@ -13,6 +12,7 @@ use std::sync::Arc;
 use thiserror::Error;
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct StormEvent {
     // name: String,
     // year: Year,
@@ -57,11 +57,11 @@ impl<'a> StormEventBuilder<'a> {
             (_, true) => {
                 // this branch handles NameYear format
                 let storm_name = &storm_id[..storm_id.len() - 4];
-                let year = Year(storm_id[storm_id.len() - 4..].parse::<i64>().map_err(|_| {
+                let year: i64 = storm_id[storm_id.len() - 4..].parse().map_err(|_| {
                     StormEventBuilderError::NoMatchingPatternForStormID(storm_id.to_string())
-                })?);
+                })?;
                 let inventory = Self::get_nhc_storm_inventory()?;
-                Self::get_nhc_code_from_storm_name_and_year(&inventory, storm_name, &year)
+                Self::get_nhc_code_from_storm_name_and_year(&inventory, storm_name, year)
             }
             (_, _) => Err(StormEventBuilderError::NoMatchingPatternForStormID(
                 storm_id.to_string(),
@@ -71,10 +71,10 @@ impl<'a> StormEventBuilder<'a> {
     }
 
     fn get_track_from_nhc_code(&self, nhc_code: &str) -> Result<DataFrame, StormEventBuilderError> {
-        let storm_year = Year(nhc_code[nhc_code.len() - 4..].parse::<i64>().map_err(|_| {
+        let storm_year: i64 = nhc_code[nhc_code.len() - 4..].parse().map_err(|_| {
             StormEventBuilderError::NoMatchingPatternForNhcCode(nhc_code.to_string())
-        })?);
-        let current_year = Year(Utc::now().year() as i64);
+        })?;
+        let current_year = Utc::now().year() as i64;
         let url = "https://ftp.nhc.noaa.gov/atcf";
         let file_deck = self.file_deck.ok_or_else(|| {
             StormEventBuilderError::UninitializedFieldError("file_deck".to_string())
@@ -90,19 +90,19 @@ impl<'a> StormEventBuilder<'a> {
             false => match file_deck {
                 ATCFFileDeck::ADVISORY => format!(
                     "archive/{}/a{}.dat.gz",
-                    storm_year.0,
+                    storm_year,
                     nhc_code.to_lowercase()
                 )
                 .to_string(),
                 ATCFFileDeck::BEST => format!(
                     "archive/{}/b{}.dat.gz",
-                    storm_year.0,
+                    storm_year,
                     nhc_code.to_lowercase()
                 )
                 .to_string(),
                 ATCFFileDeck::FIXED => format!(
                     "archive/{}/f{}.dat.gz",
-                    storm_year.0,
+                    storm_year,
                     nhc_code.to_lowercase()
                 )
                 .to_string(),
@@ -234,7 +234,7 @@ impl<'a> StormEventBuilder<'a> {
     fn get_nhc_code_from_storm_name_and_year(
         inventory: &DataFrame,
         storm_name: &str,
-        year: &Year,
+        year: i64,
     ) -> Result<String, StormEventBuilderError> {
         let some_coll = inventory
             .clone()
@@ -242,18 +242,18 @@ impl<'a> StormEventBuilder<'a> {
             .filter(
                 col("name")
                     .eq(lit(format!("{:>10}", storm_name.to_uppercase())))
-                    .and(col("year").eq(lit(year.0))),
+                    .and(col("year").eq(lit(year))),
             )
             .collect()?;
         if some_coll.height() > 1 {
             return Err(StormEventBuilderError::MultipleMatchingData {
                 storm_name: storm_name.to_owned(),
-                year: year.0,
+                year,
             });
         } else if some_coll.height() < 1 {
             return Err(StormEventBuilderError::NoMatchingData {
                 storm_name: storm_name.to_owned(),
-                year: year.0,
+                year,
             });
         }
 
