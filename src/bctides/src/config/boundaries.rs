@@ -127,7 +127,7 @@ impl OpenBoundaryForcings {
                 map.insert(boundary_id, config);
                 self
             }
-            OpenBoundaryForcings::Global(global_config) => {
+            OpenBoundaryForcings::Global(_global_config) => {
                 let mut map = BTreeMap::new();
                 map.insert(boundary_id, config);
                 // Note: This discards the global config and switches to per-boundary mode
